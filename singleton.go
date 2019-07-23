@@ -11,7 +11,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
 	"github.com/eventsource-ecosystem/eventsource"
+	"golang.org/x/xerrors"
 )
 
 const (
@@ -28,15 +30,21 @@ const (
 	ExpiresField = "expires"
 )
 
+type errorType string
+
+func (e errorType) Error() string {
+	return string(e)
+}
+
 const (
-	ErrIsAlreadyReserved = "err:unique:already_reserved"
+	errIsAlreadyReserved errorType = "err:unique:already_reserved"
 )
 
 // Option provides flexibility for configuring a unique
 type Option func(r *Registry)
 
 // WithDynamoDB allows the caller to specify a pre-configured reference to DynamoDB
-func WithDynamoDB(api *dynamodb.DynamoDB) Option {
+func WithDynamoDB(api dynamodbiface.DynamoDBAPI) Option {
 	return func(r *Registry) {
 		r.api = api
 	}
@@ -72,7 +80,7 @@ type Registry struct {
 	tableName string
 	region    string
 	endpoint  string
-	api       *dynamodb.DynamoDB
+	api       dynamodbiface.DynamoDBAPI
 }
 
 // record provides a struct representation of what is stored in dynamodb
@@ -177,7 +185,7 @@ func (r *Registry) reserve(ctx context.Context, cmd eventsource.Command) error {
 	err := r.Reserve(ctx, resource, duration)
 	if err != nil {
 		if v, ok := err.(awserr.Error); ok && v.Code() == dynamodb.ErrCodeConditionalCheckFailedException {
-			return eventsource.NewError(err, ErrIsAlreadyReserved, "%v resource already exists, %v", resource.Type, resource.ID)
+			return xerrors.Errorf("%v resource already exists, %v: %w", resource.Type, resource.ID, errIsAlreadyReserved)
 		}
 		return err
 	}
@@ -200,7 +208,7 @@ func (r *Registry) Wrap(repo Repository) RepositoryFunc {
 
 // IsAlreadyReserved returns true if the error indicates the resource already exists and is reserved by someone else
 func IsAlreadyReserved(err error) bool {
-	return eventsource.ErrHasCode(err, ErrIsAlreadyReserved)
+	return xerrors.Is(err, errIsAlreadyReserved)
 }
 
 // New constructs a new unique registry to simplify access to resource reservations
